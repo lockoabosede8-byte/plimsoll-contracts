@@ -4,13 +4,14 @@
 #![no_std]
 
 use plimsoll_types::{
-    coverage_bps, AssetRecord, Coverage, PendingUpgrade, RegistryClient, ReserveReport, Role,
-    SupplySnapshot, Tier, INSTANCE_EXTEND_TO, INSTANCE_THRESHOLD, MAX_PLAUSIBLE_BPS,
-    MIN_PLAUSIBLE_BPS, PERSISTENT_EXTEND_TO, PERSISTENT_THRESHOLD, UPGRADE_DELAY_LEDGERS,
+    attestation::encode_coverage_attestation, coverage_bps, AssetRecord, Coverage, PendingUpgrade,
+    RegistryClient, ReserveReport, Role, SupplySnapshot, Tier, INSTANCE_EXTEND_TO,
+    INSTANCE_THRESHOLD, MAX_PLAUSIBLE_BPS, MIN_PLAUSIBLE_BPS, PERSISTENT_EXTEND_TO,
+    PERSISTENT_THRESHOLD, UPGRADE_DELAY_LEDGERS,
 };
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error, token,
-    Address, BytesN, ContractExecutable, Env, Executable, String, Vec,
+    Address, Bytes, BytesN, ContractExecutable, Env, Executable, String, Vec,
 };
 
 const MAX_URI_LEN: u32 = 256;
@@ -564,6 +565,32 @@ impl CoverageLedger {
         let now = env.ledger().timestamp();
         let fresh = |t: u64| now.saturating_sub(t) <= max_age;
         fresh(coverage.supply_timestamp) && fresh(coverage.report_as_of) && coverage.bps >= min_bps
+    }
+
+    /// Return a compact authenticated attestation of `is_covered` for off-chain
+    /// verification without an RPC call.
+    pub fn sign_coverage(
+        env: Env,
+        asset: Address,
+        min_bps: u32,
+        max_age: u64,
+        min_tier: Tier,
+    ) -> Bytes {
+        let covered = Self::is_covered(env.clone(), asset.clone(), min_bps, max_age, min_tier);
+        let ledger_contract = env.current_contract_address();
+        let ledger_sequence = env.ledger().sequence();
+        let ledger_timestamp = env.ledger().timestamp();
+        encode_coverage_attestation(
+            &env,
+            &asset,
+            &ledger_contract,
+            min_bps,
+            max_age,
+            min_tier,
+            covered,
+            ledger_sequence,
+            ledger_timestamp,
+        )
     }
 
     pub fn transfer_admin(env: Env, new_admin: Address) {

@@ -269,6 +269,7 @@ data layouts, with real testnet examples, are in [EVENTS.md](EVENTS.md).
 | `get_reports(sac)` | — | `Vec<ReserveReport>` (every stored report that counts: strongest tier first, then first-post order within a tier) | — | — |
 | `coverage(sac, min_tier: Tier)` | — | `Option<Coverage>` | — | — |
 | `is_covered(sac, min_bps: u32, max_age: u64, min_tier: Tier)` | — | `bool` | — | — |
+| `sign_coverage(asset: Address, min_bps: u32, max_age: u64, min_tier: Tier)` | — | `Bytes` | — | — |
 | `registry()` / `admin()` | — | `Address` | — | — |
 | `transfer_admin(new_admin)` | admin and new_admin | `()` | — | `admin_transferred` |
 | `propose_upgrade(wasm_hash: BytesN<32>)` | admin | `()` | — | `upgrade_proposed {wasm_hash} executable_at_ledger` |
@@ -317,6 +318,36 @@ Rules:
   `None` if there is no supply snapshot or no qualifying report.
 - `is_covered` is true only if `coverage` is `Some`, both the supply snapshot
   and the report are no older than `max_age` seconds, and `bps >= min_bps`.
+- `sign_coverage(asset, min_bps, max_age, min_tier)` evaluates
+  `is_covered(asset, min_bps, max_age, min_tier)` and returns a compact,
+  domain-separated SHA-256-authenticated binary attestation (`Bytes`) encoding
+  the asset, policy parameters, boolean result, ledger sequence, ledger
+  timestamp, and ledger contract address so a third party can verify the
+  payload off-chain without an RPC call via `plimsoll_types::attestation`.
+
+### Coverage attestation proof format (v1)
+
+All multi-byte integers are big-endian.
+
+| Offset | Size | Field | Encoding |
+| --- | --- | --- | --- |
+| `0` | 4 | `magic` | ASCII `b"PLMS"` |
+| `4` | 1 | `version` | `0x01` |
+| `5` | 1 | `covered` | `0x01` if covered, `0x00` otherwise |
+| `6` | 4 | `min_bps` | `u32` big-endian |
+| `10` | 8 | `max_age` | `u64` big-endian |
+| `18` | 4 | `min_tier` | `u32` big-endian (`1` = Transcribed, `2` = IssuerSigned, `3` = AuditorSigned) |
+| `22` | 4 | `ledger_sequence` | `u32` big-endian |
+| `26` | 8 | `ledger_timestamp` | `u64` big-endian |
+| `34` | 2 | `asset_xdr_len` | `u16` big-endian (`N`) |
+| `36` | `N` | `asset_xdr` | `asset.to_xdr()` |
+| `36 + N` | 2 | `ledger_xdr_len` | `u16` big-endian (`M`) |
+| `38 + N` | `M` | `ledger_xdr` | `ledger_contract.to_xdr()` |
+| `38 + N + M` | 32 | `digest` | `sha256(b"plimsoll-coverage-attestation-v1" \|\| body)` |
+
+`body` is the exact byte slice `0..(38 + N + M)`. Verification checks the
+magic, version, `covered` byte (`0` or `1`), `min_tier` (`1..=3`), XDR-decodes
+both addresses, and confirms `digest` matches the domain-separated SHA-256 hash.
 
 Errors (`LedgerError`): `NotAStellarAsset = 1`, `AlreadyListed = 2`,
 `AssetNotListed = 3`, `NotSupplyPoster = 4`, `NotReporter = 5`,
@@ -389,6 +420,7 @@ covered. Withdrawals are never blocked.
 | `balance(of: Address)` | — | `i128` | — | — |
 | `config()` | — | `VaultConfig` | — | — |
 | `can_deposit()` | — | `bool` | — | — |
+| `simulate_coverage(proposed_reserve: i128)` | — | `u128` | — | — |
 
 `can_deposit()` makes the same `is_covered(asset, min_bps, max_age,
 min_tier)` call `deposit` makes, with the stored config, and returns its
@@ -396,6 +428,11 @@ answer. It is true exactly when a positive deposit would pass the coverage
 gate, so a front end can show whether the vault is open without simulating a
 deposit and reading a `NotCovered` failure. It says nothing about the
 depositor's balance or authorisation.
+
+`simulate_coverage(proposed_reserve)` is a pure view function (no vault state
+writes) that reads the current on-chain supply and qualifying reserves from the
+configured `coverage-ledger` and returns the resulting `coverage_bps` (as
+`u128`) if `proposed_reserve` were added to the current reserves.
 
 Errors (`VaultError`): `InvalidAmount = 1`, `NotCovered = 2`,
 `InsufficientBalance = 3`. Causes and remedies, and the asset-contract errors a

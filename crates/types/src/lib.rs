@@ -4,6 +4,8 @@
 
 use soroban_sdk::{contractclient, contracttype, Address, BytesN, Env, String};
 
+pub mod attestation;
+
 /// One day of ledgers at a 5-second close time.
 pub const DAY_IN_LEDGERS: u32 = 17_280;
 /// Extend a persistent entry once it has less than this many ledgers left.
@@ -187,6 +189,7 @@ pub trait RegistryInterface {
 /// The subset of coverage-ledger that consumers call.
 #[contractclient(name = "CoverageLedgerClient")]
 pub trait CoverageLedgerInterface {
+    fn get_supply(env: Env, sac: Address) -> Option<SupplySnapshot>;
     fn coverage(env: Env, sac: Address, min_tier: Tier) -> Option<Coverage>;
     fn is_covered(env: Env, sac: Address, min_bps: u32, max_age: u64, min_tier: Tier) -> bool;
 }

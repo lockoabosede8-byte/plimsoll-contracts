@@ -1945,6 +1945,8 @@ fn sign_coverage_proof_rejects_tampering() {
     assert_eq!(
         plimsoll_types::attestation::verify_coverage_attestation(&f.env, &proof),
         Err(plimsoll_types::attestation::AttestationError::DigestMismatch)
+    );
+}
 
 // ---- emergency pause (#77) ------------------------------------------------
 

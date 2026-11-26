@@ -4,15 +4,11 @@
 #![no_std]
 
 use plimsoll_types::{
-    attestation::encode_coverage_attestation, coverage_bps, AssetRecord, Coverage, PendingUpgrade,
-    RegistryClient, ReserveReport, Role, SupplySnapshot, Tier, INSTANCE_EXTEND_TO,
-    INSTANCE_THRESHOLD, MAX_PLAUSIBLE_BPS, MIN_PLAUSIBLE_BPS, PERSISTENT_EXTEND_TO,
-    PERSISTENT_THRESHOLD, UPGRADE_DELAY_LEDGERS,
-
-    coverage_bps, AssetRecord, Coverage, CoverageStatus, CoveredInfo, PendingUpgrade,
-    RegistryClient, ReserveReport, Role, StaleInfo, SupplySnapshot, SupplyTokenClient, Tier,
-    INSTANCE_EXTEND_TO, INSTANCE_THRESHOLD, MAX_PLAUSIBLE_BPS, MIN_PLAUSIBLE_BPS,
-    PERSISTENT_EXTEND_TO, PERSISTENT_THRESHOLD, SECONDS_PER_LEDGER, UPGRADE_DELAY_LEDGERS,
+    attestation::encode_coverage_attestation, coverage_bps, AssetRecord, Coverage, CoverageStatus,
+    CoveredInfo, PendingUpgrade, RegistryClient, ReserveReport, Role, StaleInfo, SupplySnapshot,
+    SupplyTokenClient, Tier, INSTANCE_EXTEND_TO, INSTANCE_THRESHOLD, MAX_PLAUSIBLE_BPS,
+    MIN_PLAUSIBLE_BPS, PERSISTENT_EXTEND_TO, PERSISTENT_THRESHOLD, SECONDS_PER_LEDGER,
+    UPGRADE_DELAY_LEDGERS,
 };
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error, token,

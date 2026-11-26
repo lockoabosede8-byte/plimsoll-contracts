@@ -109,7 +109,7 @@ The address stored as `Admin` in reporter-registry. It decides who may speak.
   from events: [#29](https://github.com/plimsoll-protocol/plimsoll-contracts/issues/29).
 - The admin is a single address. Nothing in the contract requires a multisig;
   that is operational practice ([RUNBOOK.md](RUNBOOK.md#7-move-admin-to-a-multisig)).
-- Admin transfer happens in one step, with no propose-and-accept: [#3](https://github.com/plimsoll-protocol/plimsoll-contracts/issues/3).
+- Admin transfer happens in one step, with no propose-and-accept: [#3](https://github.com/plimsoll-protocol/plimsoll-contracts/issues/3). The flow as implemented, and what to do when a transfer should not go ahead, is in [admin-transfer.md](admin-transfer.md).
 
 **What an integrator should do:**
 

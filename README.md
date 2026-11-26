@@ -75,7 +75,9 @@ What each actor (admins, supply poster, reporters, issuers, anyone) can make
 the ledger say, what limits them and what an integrator should do about it is
 in [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md). Every admin operation
 (upgrades, moving admin to a multisig, onboarding and revoking reporters) is a
-tested, step-by-step procedure in [docs/RUNBOOK.md](docs/RUNBOOK.md).
+tested, step-by-step procedure in [docs/RUNBOOK.md](docs/RUNBOOK.md). How the
+two-step admin transfer works, and what to do when it should not go ahead, is
+in [docs/admin-transfer.md](docs/admin-transfer.md).
 
 ### Why it is Stellar-specific
 

@@ -140,6 +140,7 @@ All three contracts use the same TTL policy, defined in `plimsoll-types`:
 | `Supply(Address)` (persistent) | `post_supply` (write), `get_supply`, `coverage`, `is_covered`, `coverage_status` (read) |
 | `NativeSupply(Address)` (persistent) | `enable_native_supply` (write), `native_supply_token`, `coverage`, `is_covered`, `coverage_status` (read) |
 | `Report(Address, Tier)` (persistent) | `post_reserve` (write), `get_report`, `get_reports`, `coverage`, `is_covered`, `coverage_status` (read) |
+| `Assets` (persistent) | `list_asset` (write), `asset_reporter_pairs` (read) |
 
 **covered-vault**
 
@@ -240,6 +241,7 @@ Records what was said, and answers coverage questions.
 | `NativeSupply(Address)` | persistent | `Address`: the SEP-41 token queried for supply when the opt-in is set |
 | `ReportBy(Address, Tier, Address)` | persistent | `ReserveReport`: the latest from one reporter at one tier for one asset |
 | `Reporters(Address, Tier)` | persistent | `Vec<Address>`: the reporters with a `ReportBy` entry at that tier, in the order they first posted; at most `MAX_REPORTERS_PER_TIER = 4` |
+| `Assets` | persistent | `Vec<Address>`: every listed asset, in listing order. The `asset_reporter_pairs` index |
 | `Report(Address, Tier)` | persistent | `ReserveReport`: the v0.1 layout (one per tier). Read until migrated, never written; see [Upgrading a v0.1 deployment](#upgrading-a-v01-deployment) |
 | `Alias(Address)` | persistent | `Address`: maps a deprecated asset SAC to its successor SAC |
 
@@ -281,12 +283,15 @@ data layouts, with real testnet examples, are in [EVENTS.md](EVENTS.md).
 | --- | --- | --- | --- | --- |
 | `__constructor(admin: Address, registry: Address)` | — | — | — | — |
 | `list_asset(sac: Address)` | none (permissionless) | `AssetRecord` | `NotAStellarAsset`, `AlreadyListed` | `asset_listed {sac} code, issuer` |
-| `post_supply(poster: Address, sac: Address, amount: i128, ledger: u32, breakdown_hash: BytesN<32>)` | poster | `()` | `NotSupplyPoster`, `AssetNotListed`, `InvalidAmount`, `FutureLedger`, `StaleLedger` | `supply_posted {sac} amount, ledger, breakdown_hash, poster` |
+| `post_supply(poster: Address, sac: Address, amount: i128, ledger: u32, breakdown_hash: BytesN<32>)` | poster | `()` | `NotSupplyPoster`, `AssetNotListed`, `InvalidAmount`, `FutureLedger`, `StaleLedger`, `LedgerTooOld` | `supply_posted {sac} amount, ledger, breakdown_hash, poster` |
 | `post_reserve(reporter: Address, sac: Address, amount: i128, as_of: u64, doc_hash: BytesN<32>, doc_uri: String)` | reporter | `Tier` | `NotReporter`, `AssetNotListed`, `InvalidAmount`, `FutureTimestamp`, `StaleReport`, `InvalidUri`, `ImplausibleAmount`, `TooManyReporters` | `reserve_posted {sac, tier} amount, as_of, reporter, doc_hash, doc_uri` |
+| `retract_reserve(reporter: Address, sac: Address)` | reporter | `()` | `AssetNotListed`, `NotReporter`, `NoReportToRetract` | `reserve_retracted {sac, tier} reporter, as_of` |
 | `get_asset(sac)` | — | `Option<AssetRecord>` | — | — |
 | `get_supply(sac)` | — | `Option<SupplySnapshot>` | — | — |
 | `get_report(sac, tier: Tier)` | — | `Option<ReserveReport>` (the freshest report at that tier that counts) | — | — |
 | `get_reports(sac)` | — | `Vec<ReserveReport>` (every stored report that counts: strongest tier first, then first-post order within a tier) | — | — |
+| `reporter_last_post(reporter: Address, asset: Address)` | — | `Option<u64>` (the ledger timestamp of that reporter's most recent post for the asset) | — | — |
+| `asset_reporter_pairs(cursor: Option<u32>, limit: u32)` | — | `Vec<(Address, Address)>` (up to `MAX_PAIRS_PER_CALL = 50` (asset, reporter) pairs) | — | — |
 | `coverage(sac, min_tier: Tier)` | — | `Option<Coverage>` | — | — |
 | `is_covered(sac, min_bps: u32, max_age: u64, min_tier: Tier)` | — | `bool` | — | — |
 | `sign_coverage(asset: Address, min_bps: u32, max_age: u64, min_tier: Tier)` | — | `Bytes` | — | — |
@@ -323,6 +328,17 @@ Rules:
   forward per reporter: `as_of` strictly greater than that reporter's stored
   report at that tier, and not in the future. Another reporter's report at the
   same tier does not make a figure stale.
+- A supply snapshot's `ledger` must be no more than 720 ledgers behind the
+  current ledger. This is approximately one hour at Stellar's usual five
+  seconds per ledger; the sequence-number bound avoids treating a fresh
+  submission time as evidence that an old snapshot is fresh. A snapshot
+  exactly 720 ledgers behind is accepted.
+- `retract_reserve` resolves the reporter's tier exactly as `post_reserve`
+  does, then removes only that reporter's stored report at that tier. If no
+  such report exists, it fails with `NoReportToRetract`. Retraction frees the
+  reporter's slot at that tier, and coverage falls back to the next qualifying
+  report or returns `None`. The `reserve_retracted` event preserves the
+  removed report's identity and `as_of`; history remains off-chain in events.
 - Each tier holds reports from at most `MAX_REPORTERS_PER_TIER = 4` reporters
   per asset. When a reporter with no report at a tier posts to a full tier,
   `post_reserve` first drops the entries whose reporter no longer counts
@@ -402,7 +418,8 @@ Errors (`LedgerError`): `NotAStellarAsset = 1`, `AlreadyListed = 2`,
 `InvalidAmount = 6`, `FutureLedger = 7`, `StaleLedger = 8`,
 `FutureTimestamp = 9`, `StaleReport = 10`, `InvalidUri = 11`,
 `ImplausibleAmount = 12`, `TooManyReporters = 13`, `UpgradeNotProposed = 14`,
-`UpgradeDelayNotElapsed = 15`, `SelfAlias = 16`, `Paused = 17`.
+`UpgradeDelayNotElapsed = 15`, `SelfAlias = 16`, `Paused = 17`,
+`LedgerTooOld = 18`, `NoReportToRetract = 19`.
 Causes, remedies and the order they are checked in: [ERRORS.md](ERRORS.md#ledgererror).
 
 ### Emergency pause

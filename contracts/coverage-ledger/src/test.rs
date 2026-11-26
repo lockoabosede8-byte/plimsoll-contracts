@@ -348,6 +348,25 @@ fn post_supply_rejects_future_ledger() {
 }
 
 #[test]
+fn post_supply_accepts_snapshot_at_maximum_age() {
+    let f = listed();
+    let ledger = 1_000 - MAX_SUPPLY_LEDGER_AGE;
+    f.ledger
+        .post_supply(&f.poster, &f.sac, &UNIT, &ledger, &hash(&f.env, 1));
+    assert_eq!(f.ledger.get_supply(&f.sac).unwrap().ledger, ledger);
+}
+
+#[test]
+fn post_supply_rejects_snapshot_older_than_maximum_age() {
+    let f = listed();
+    let ledger = 1_000 - MAX_SUPPLY_LEDGER_AGE - 1;
+    let res = f
+        .ledger
+        .try_post_supply(&f.poster, &f.sac, &UNIT, &ledger, &hash(&f.env, 1));
+    assert_eq!(res, Err(Ok(LedgerError::LedgerTooOld.into())));
+}
+
+#[test]
 fn post_supply_must_move_forward() {
     let f = listed();
     f.ledger
@@ -993,6 +1012,109 @@ fn post(f: &Fixture, who: &Address, amount: i128, as_of: u64) -> Tier {
 fn supply(f: &Fixture, amount: i128) {
     f.ledger
         .post_supply(&f.poster, &f.sac, &amount, &990, &hash(&f.env, 1));
+}
+
+#[test]
+fn retract_reserve_removes_only_the_callers_report_and_falls_back() {
+    let f = listed();
+    supply(&f, 100 * UNIT);
+    let second = add_reporter(&f, Role::Auditor);
+    post(&f, &f.auditor, 90 * UNIT, T0 - 100);
+    post(&f, &second, 95 * UNIT, T0 - 10);
+
+    f.ledger.retract_reserve(&second, &f.sac);
+
+    let (topics, data) = last_ledger_event(&f);
+    let expected_topics: Vec<Val> = (
+        Symbol::new(&f.env, "reserve_retracted"),
+        f.sac.clone(),
+        Tier::AuditorSigned,
+    )
+        .into_val(&f.env);
+    assert_eq!(topics, expected_topics);
+    let expected_data = Map::from_array(
+        &f.env,
+        [
+            (
+                Symbol::new(&f.env, "reporter"),
+                second.clone().into_val(&f.env),
+            ),
+            (Symbol::new(&f.env, "as_of"), (T0 - 10).into_val(&f.env)),
+        ],
+    );
+    assert_eq!(data, expected_data);
+
+    let remaining = f.ledger.get_report(&f.sac, &Tier::AuditorSigned).unwrap();
+    assert_eq!(remaining.reporter, f.auditor);
+    assert_eq!(remaining.amount, 90 * UNIT);
+    assert_eq!(
+        f.ledger
+            .coverage(&f.sac, &Tier::AuditorSigned)
+            .unwrap()
+            .reserves,
+        90 * UNIT
+    );
+
+    f.ledger.retract_reserve(&f.auditor, &f.sac);
+    assert!(f.ledger.coverage(&f.sac, &Tier::AuditorSigned).is_none());
+}
+
+#[test]
+fn retract_reserve_rejects_a_reporter_who_did_not_post_it() {
+    let f = listed();
+    let other = add_reporter(&f, Role::Auditor);
+    post(&f, &f.auditor, UNIT, T0);
+
+    let res = f.ledger.try_retract_reserve(&other, &f.sac);
+    assert_eq!(res, Err(Ok(LedgerError::NoReportToRetract.into())));
+    assert_eq!(f.ledger.get_reports(&f.sac).len(), 1);
+}
+
+#[test]
+fn retract_reserve_rejects_when_the_reporter_has_nothing_to_retract() {
+    let f = listed();
+    let res = f.ledger.try_retract_reserve(&f.auditor, &f.sac);
+    assert_eq!(res, Err(Ok(LedgerError::NoReportToRetract.into())));
+}
+
+#[test]
+fn retract_reserve_rejects_an_unregistered_reporter() {
+    let f = listed();
+    let res = f.ledger.try_retract_reserve(&f.poster, &f.sac);
+    assert_eq!(res, Err(Ok(LedgerError::NotReporter.into())));
+}
+
+#[test]
+fn retract_reserve_requires_the_reporters_authorisation() {
+    let f = listed();
+    post(&f, &f.auditor, UNIT, T0);
+    authorise_only(&f, &[]);
+
+    assert_eq!(
+        f.ledger.try_retract_reserve(&f.auditor, &f.sac),
+        Err(Ok(auth_failure()))
+    );
+    assert_eq!(f.ledger.get_reports(&f.sac).len(), 1);
+}
+
+#[test]
+fn retract_reserve_requires_a_listed_asset() {
+    let f = setup();
+    let res = f.ledger.try_retract_reserve(&f.auditor, &f.sac);
+    assert_eq!(res, Err(Ok(LedgerError::AssetNotListed.into())));
+}
+
+#[test]
+fn a_reporter_can_repost_after_retraction() {
+    let f = listed();
+    post(&f, &f.auditor, UNIT, T0 - 10);
+    f.ledger.retract_reserve(&f.auditor, &f.sac);
+
+    post(&f, &f.auditor, 2 * UNIT, T0 - 10);
+
+    let report = f.ledger.get_report(&f.sac, &Tier::AuditorSigned).unwrap();
+    assert_eq!(report.amount, 2 * UNIT);
+    assert_eq!(report.as_of, T0 - 10);
 }
 
 #[test]
@@ -1946,6 +2068,250 @@ fn sign_coverage_proof_rejects_tampering() {
         plimsoll_types::attestation::verify_coverage_attestation(&f.env, &proof),
         Err(plimsoll_types::attestation::AttestationError::DigestMismatch)
     );
+}
+
+// ---- reporter_last_post (#138) --------------------------------------------
+
+fn another_asset(f: &Fixture) -> Address {
+    f.env
+        .register_stellar_asset_contract_v2(Address::generate(&f.env))
+        .address()
+}
+
+#[test]
+fn reporter_last_post_is_none_before_the_reporter_posts() {
+    let f = listed();
+    assert_eq!(f.ledger.reporter_last_post(&f.auditor, &f.sac), None);
+    assert_eq!(f.ledger.reporter_last_post(&f.issuer, &f.sac), None);
+}
+
+#[test]
+fn reporter_last_post_returns_the_post_timestamp_not_the_as_of() {
+    let f = listed();
+    post(&f, &f.auditor, UNIT, T0 - 500);
+    assert_eq!(f.ledger.reporter_last_post(&f.auditor, &f.sac), Some(T0));
+
+    f.env.ledger().set_timestamp(T0 + 60);
+    post(&f, &f.auditor, UNIT, T0 - 100);
+    assert_eq!(
+        f.ledger.reporter_last_post(&f.auditor, &f.sac),
+        Some(T0 + 60)
+    );
+}
+
+#[test]
+fn reporter_last_post_is_per_reporter_and_per_asset() {
+    let f = listed();
+    let other = another_asset(&f);
+    f.ledger.list_asset(&other);
+    post(&f, &f.issuer, UNIT, T0 - 10);
+
+    assert_eq!(f.ledger.reporter_last_post(&f.issuer, &f.sac), Some(T0));
+    // The transcriber never posted for this asset, and the issuer's post is
+    // for this asset only.
+    assert_eq!(f.ledger.reporter_last_post(&f.transcriber, &f.sac), None);
+    assert_eq!(f.ledger.reporter_last_post(&f.issuer, &other), None);
+}
+
+#[test]
+fn reporter_last_post_spans_every_tier_the_reporter_posted_at() {
+    let f = listed();
+    post(&f, &f.transcriber, UNIT, T0 - 300);
+    assert_eq!(
+        f.ledger.reporter_last_post(&f.transcriber, &f.sac),
+        Some(T0)
+    );
+
+    // Promoted to auditor, the same reporter keeps the transcription and
+    // starts a second entry at the stronger tier.
+    f.registry.set_reporter(
+        &f.transcriber,
+        &Role::Auditor,
+        &String::from_str(&f.env, "promoted"),
+    );
+    f.env.ledger().set_timestamp(T0 + 120);
+    assert_eq!(post(&f, &f.transcriber, UNIT, T0 - 60), Tier::AuditorSigned);
+    assert_eq!(
+        f.ledger.reporter_last_post(&f.transcriber, &f.sac),
+        Some(T0 + 120)
+    );
+}
+
+#[test]
+fn reporter_last_post_reads_a_legacy_report() {
+    let f = listed();
+    let legacy = legacy_report(&f, &f.auditor, Tier::AuditorSigned, UNIT, T0 - 50);
+    write_legacy(&f, &legacy);
+    assert_eq!(
+        f.ledger.reporter_last_post(&f.auditor, &f.sac),
+        Some(T0 - 50)
+    );
+}
+
+// ---- asset_reporter_pairs (#159) ------------------------------------------
+
+#[test]
+fn asset_reporter_pairs_is_empty_before_anything_is_listed() {
+    let f = setup();
+    assert!(f.ledger.asset_reporter_pairs(&None, &10).is_empty());
+}
+
+#[test]
+fn asset_reporter_pairs_lists_each_reporter_once_strongest_tier_first() {
+    let f = listed();
+    one_report_per_tier(&f);
+
+    let pairs = f.ledger.asset_reporter_pairs(&None, &10);
+    assert_eq!(pairs.len(), 3);
+    assert_eq!(pairs.get(0).unwrap(), (f.sac.clone(), f.auditor.clone()));
+    assert_eq!(pairs.get(1).unwrap(), (f.sac.clone(), f.issuer.clone()));
+    assert_eq!(
+        pairs.get(2).unwrap(),
+        (f.sac.clone(), f.transcriber.clone())
+    );
+}
+
+#[test]
+fn asset_reporter_pairs_lists_a_reporter_once_after_a_role_change() {
+    let f = listed();
+    post(&f, &f.transcriber, UNIT, T0 - 300);
+    f.registry.set_reporter(
+        &f.transcriber,
+        &Role::Auditor,
+        &String::from_str(&f.env, "promoted"),
+    );
+    post(&f, &f.transcriber, UNIT, T0 - 200);
+
+    let pairs = f.ledger.asset_reporter_pairs(&None, &10);
+    assert_eq!(pairs.len(), 1);
+    assert_eq!(
+        pairs.get(0).unwrap(),
+        (f.sac.clone(), f.transcriber.clone())
+    );
+}
+
+#[test]
+fn asset_reporter_pairs_keeps_a_report_whose_reporter_no_longer_counts() {
+    let f = listed();
+    post(&f, &f.auditor, UNIT, T0 - 10);
+    f.registry.revoke(&f.auditor);
+
+    assert!(f.ledger.get_reports(&f.sac).is_empty());
+    let pairs = f.ledger.asset_reporter_pairs(&None, &10);
+    assert_eq!(pairs.len(), 1);
+    assert_eq!(pairs.get(0).unwrap(), (f.sac.clone(), f.auditor.clone()));
+}
+
+#[test]
+fn asset_reporter_pairs_pages_with_a_cursor() {
+    let f = listed();
+    let other = another_asset(&f);
+    f.ledger.list_asset(&other);
+    post(&f, &f.auditor, UNIT, T0 - 300);
+    post(&f, &f.issuer, UNIT, T0 - 200);
+    f.ledger.post_reserve(
+        &f.transcriber,
+        &other,
+        &UNIT,
+        &(T0 - 100),
+        &hash(&f.env, 4),
+        &uri(&f.env),
+    );
+    f.ledger.post_reserve(
+        &f.auditor,
+        &other,
+        &UNIT,
+        &(T0 - 50),
+        &hash(&f.env, 4),
+        &uri(&f.env),
+    );
+
+    let all = f.ledger.asset_reporter_pairs(&None, &10);
+    assert_eq!(all.len(), 4);
+    assert_eq!(all.get(0).unwrap(), (f.sac.clone(), f.auditor.clone()));
+    assert_eq!(all.get(1).unwrap(), (f.sac.clone(), f.issuer.clone()));
+    assert_eq!(all.get(2).unwrap(), (other.clone(), f.auditor.clone()));
+    assert_eq!(all.get(3).unwrap(), (other.clone(), f.transcriber.clone()));
+
+    let first = f.ledger.asset_reporter_pairs(&None, &3);
+    let second = f.ledger.asset_reporter_pairs(&Some(3), &3);
+    assert_eq!(first.len(), 3);
+    assert_eq!(second.len(), 1);
+    for i in 0..3 {
+        assert_eq!(first.get(i).unwrap(), all.get(i).unwrap());
+    }
+    assert_eq!(second.get(0).unwrap(), all.get(3).unwrap());
+
+    // The explicit zero cursor is the default, and a zero limit is empty.
+    assert_eq!(f.ledger.asset_reporter_pairs(&Some(0), &3), first);
+    assert!(f.ledger.asset_reporter_pairs(&None, &0).is_empty());
+    assert!(f.ledger.asset_reporter_pairs(&Some(4), &3).is_empty());
+    assert!(f.ledger.asset_reporter_pairs(&Some(99), &3).is_empty());
+}
+
+#[test]
+fn asset_reporter_pairs_caps_a_page_at_fifty() {
+    let f = setup();
+    let auditors: std::vec::Vec<Address> =
+        (0..4).map(|_| add_reporter(&f, Role::Auditor)).collect();
+    let transcribers: std::vec::Vec<Address> = (0..4)
+        .map(|_| add_reporter(&f, Role::Transcriber))
+        .collect();
+
+    // Six assets, each with four auditors, the issuer and four transcribers:
+    // 54 pairs, more than one page may carry.
+    for _ in 0..6 {
+        let handle = f
+            .env
+            .register_stellar_asset_contract_v2(Address::generate(&f.env));
+        let sac = handle.address();
+        let issuer = handle.issuer().address();
+        f.ledger.list_asset(&sac);
+        for (i, who) in auditors.iter().enumerate() {
+            f.ledger.post_reserve(
+                who,
+                &sac,
+                &UNIT,
+                &(T0 - 1_000 + i as u64),
+                &hash(&f.env, 4),
+                &uri(&f.env),
+            );
+        }
+        f.ledger.post_reserve(
+            &issuer,
+            &sac,
+            &UNIT,
+            &(T0 - 900),
+            &hash(&f.env, 4),
+            &uri(&f.env),
+        );
+        for (i, who) in transcribers.iter().enumerate() {
+            f.ledger.post_reserve(
+                who,
+                &sac,
+                &UNIT,
+                &(T0 - 800 + i as u64),
+                &hash(&f.env, 4),
+                &uri(&f.env),
+            );
+        }
+    }
+
+    let first = f.ledger.asset_reporter_pairs(&None, &1_000);
+    assert_eq!(first.len(), MAX_PAIRS_PER_CALL);
+
+    let mut total = 0u32;
+    let mut cursor: Option<u32> = None;
+    loop {
+        let page = f.ledger.asset_reporter_pairs(&cursor, &1_000);
+        assert!(page.len() <= MAX_PAIRS_PER_CALL);
+        if page.is_empty() {
+            break;
+        }
+        total += page.len();
+        cursor = Some(total);
+    }
+    assert_eq!(total, 54);
 }
 
 // ---- emergency pause (#77) ------------------------------------------------

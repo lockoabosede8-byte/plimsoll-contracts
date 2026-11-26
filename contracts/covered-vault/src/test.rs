@@ -401,6 +401,7 @@ fn simulate_coverage_without_reserve_report_uses_on_chain_supply() {
 fn simulate_coverage_without_supply_returns_max() {
     let f = setup();
     assert_eq!(f.vault.simulate_coverage(&(500 * UNIT)), u32::MAX as u128);
+}
 
 #[test]
 fn deposit_propagates_a_paused_ledger() {

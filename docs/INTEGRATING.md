@@ -339,14 +339,18 @@ is the ledger close time (`is_covered` in
 - **Snapshot:** `supply_timestamp` is the snapshot's `timestamp`, which
   `post_supply` sets to the ledger close time when it was posted. It is
   **not** derived from the snapshot's `ledger` field (the ledger the supply was
-  computed at).
+  computed at). To prevent an old figure from being stamped as fresh,
+  `post_supply` also rejects a snapshot computed more than 720 ledgers
+  (approximately one hour) before the current ledger; the exact boundary is
+  accepted.
 
 Neither can be in the future: the ledger refuses an `as_of` later than the
 ledger close time (`FutureTimestamp`) and a `ledger` later than the current
 one (`FutureLedger`).
 
 *Tests: `report_freshness_uses_as_of_not_post_time`,
-`snapshot_freshness_uses_post_time_not_its_ledger`, `max_age_is_inclusive`.*
+`snapshot_freshness_uses_post_time_within_the_ledger_age_bound`,
+`max_age_is_inclusive`.*
 
 ### Revoked reporters stop counting at once
 
